@@ -17,53 +17,34 @@ knitr::opts_chunk$set(
 # Todo 
 Simplify the `results1` and return function and possibly add `gamm`. But for now this is sufficient. Expect the function to still run very slowly because of the multiple steps and how each model is running 15k+ genes.
 
+The current results function doesn't handle more complicated smooths. Also contrasting should be done at the fitting level. Needs to rewrite `results1`.
 
 # Scratchpad
 ```{r setup}
 library(devtools)
 library(testthat)
+library(microbenchmark)
 load_all()
 
-library(microbenchmark)
-
 set.seed(1234)
-sim1 <- makeExample(n = 4, m = 10)
+sim1 <- makeExample(n = 10, m = 10)
 sim1$id <- factor(seq_along(sim1$pheno))
 sim1$f <- factor(rbinom(ncol(sim1), 1, 0.5)) 
-sim1@design <- ~ s(pheno) + s(id, bs = "re") + f
+sim1@design <- ~ f + s(pheno, by = f) + s(id, bs = "re")
 
 debug(NBAMSeq1)
 debug(gamFit2)
-test <- NBAMSeq1(sim1, use_bam = TRUE)
-test1 <- NBAMSeq1(sim1, use_bam = FALSE)
-test2 <- NBAMSeq1(sim1, AIC = TRUE)
-results(test2, "pheno")
-
-results(test, name = "pheno")
-results(test1, name = "pheno")
-
-results(test, contrast = c("f", "1", "0"))
-results(test1, contrast = c("f", "1", "0"))
-
-results(test, name = "pheno")
+sim_fit <- NBAMSeq1(sim1)
+mcols(sim_fit)$fit[[4]]
 ```
 
 ```{r}
+
+```
+
+```{r setup}
 library(mgcv)
-gs <- gamSim(6, n = 200, scale = .2, dist = "poisson")
+d <- gam(mpg ~ s(drat), data = mtcars)
 
-gam(
-  y ~ s(x0) + s(x1) + s(x2) + s(fac, bs = "re"),
-  family = nb(),
-  data = gs
-) |> 
-  summary()
-
-gamm(
-  y ~ s(x0) + s(x1) + s(x2),
-  family = nb(),
-  data = gs,
-  random = list(fac =  ~ 1)
-)[[2]] |> 
-  summary()
+lobstr::obj_size(summary(d))
 ```

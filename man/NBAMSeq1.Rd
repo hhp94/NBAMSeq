@@ -11,6 +11,7 @@ NBAMSeq1(
   BPPARAM = NULL,
   use_bam = FALSE,
   AIC = FALSE,
+  alpha_bound = Inf,
   ...
 )
 }
@@ -27,6 +28,8 @@ details.}
 \item{use_bam}{use bam from mgcv instead of gam. bam can be faster for large data.}
 
 \item{AIC}{generate AIC/BIC for each gene or not.}
+
+\item{alpha_bound}{set upper bound for gene wise dispersion parameter. Can help if there are errors. 10 is sufficiently big.}
 
 \item{...}{additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}}
 }

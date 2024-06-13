@@ -11,6 +11,7 @@
 #' \code{\link[BiocParallel]{register}} for details.
 #' @param use_bam use bam from mgcv instead of gam. bam can be faster for large data.
 #' @param AIC generate AIC/BIC for each gene or not.
+#' @param alpha_bound set upper bound for gene wise dispersion parameter. Can help if there are errors. 10 is sufficiently big.
 #' @param ... additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}
 #' @export
 #' @importFrom mgcv bam gam s nb negbin
@@ -25,7 +26,9 @@
 #' @examples
 #' gsd <- makeExample(n = 3, m = 10)
 #' gsd <- NBAMSeq1(gsd)
-NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC = FALSE, ...) {
+NBAMSeq1 <- function(
+    object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC = FALSE, alpha_bound = Inf,
+    ...) {
   ## check input
   stopifnot(is(object, "NBAMSeqDataSet"))
   stopifnot(is.numeric(gamma))
@@ -35,6 +38,7 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC =
   stopifnot(length(use_bam) == 1)
   stopifnot(is.logical(AIC))
   stopifnot(length(AIC) == 1)
+  stopifnot(alpha_bound > 0, length(alpha_bound) == 1)
   metadata(object)$AIC <- AIC
 
   if (is.null(BPPARAM)) {
@@ -89,18 +93,17 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC =
   ## remove models that failed
   gamGeneEst <- gamGeneEst[lengths(gamGeneEst) != 0]
   stopifnot("GAM for all genes failled. Check the formula and data" = length(gamGeneEst) > 0)
-  passed_genes <- vapply(
-    gamGeneEst, \(x) {
-      x$gene
-    }, "character"
-  )
+  passed_genes <- vapply(gamGeneEst, function(x) {x$gene}, "character")
   dds <- dds[passed_genes, ]
   object <- object[passed_genes, ]
   ##  get gam gene wise dispersion estimates and save them in mcols(dds)
-  mcols(dds)$dispGeneEst <- 1 / vapply(gamGeneEst, function(x) x$theta, 1)
-  ##  bound gene wise dispersion
-  maxDisp <- pmax(10, ncol(dds))
-  mcols(dds)$dispGeneEst <- pmin(mcols(dds)$dispGeneEst, maxDisp)
+  mcols(dds)$dispGeneEst <- (1 / vapply(gamGeneEst, function(x) {x$theta}, 1))
+
+  if (!is.infinite(alpha_bound)) {
+    ##  bound gene wise dispersion
+    maxDisp <- pmax(alpha_bound, ncol(dds))
+    mcols(dds)$dispGeneEst <- pmin(mcols(dds)$dispGeneEst, maxDisp)
+  }
 
   ##  fit dispersion trend via `estimateDispersionsFit` function in DESeq2
   message("Estimating dispersion trend")
@@ -124,13 +127,13 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC =
       estimateDispersionsMAP(dds)
     }
   )
+
   ind <- which(is.na(mcols(dds)$dispMAP))
   if (length(ind) > 0) {
     mcols(dds)$dispMAP[ind] <- mcols(dds)$dispGeneEst[ind]
   }
 
   gamDispMAP <- mcols(dds)$dispMAP
-  mcols(object) <- mcols(dds)
 
   message("Estimating model coefficients")
   gamFinal <- bplapply(
@@ -151,95 +154,17 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC =
     BPPARAM = BPPARAM
   )
 
-  ## process variables
-  dat$y <- assay(object)[1, ]
-  gammodel <- gam(formula_offset,
-    family = negbin(theta = 3, link = "log"),
-    method = "REML", data = dat, fit = FALSE
-  )
-  ## process factors
-  pterms <- vapply(
-    attr(gammodel$pterms, "term.labels"),
-    function(x) is.factor(colData(object)[[x]]), FALSE
-  )
-  if (length(pterms) == 0) {
-    pterms <- "Intercept"
-  } else {
-    pterms_name <- lapply(seq_along(pterms), function(i) {
-      if (pterms[i]) {
-        lv <- levels(colData(object)[[names(pterms)[i]]])
-        rt <- paste0(names(pterms)[i], "_", lv[2:length(lv)], "_vs_", lv[1])
-      } else {
-        rt <- names(pterms)[i]
-      }
-      rt
-    })
-    pterms <- c("Intercept", unlist(pterms_name))
-  }
+  ## remove models that failed and align the data by row names
+  gamFinal <- gamFinal[lengths(gamFinal) != 0]
+  stopifnot("GAM for all genes second step failed. Check the formula and data" = length(gamFinal) > 0)
+  passed_genes_final <- vapply(gamFinal, function(x) {x$gene_id}, FUN.VALUE = "character")
+  names(gamFinal) <- passed_genes_final
+  dds <- dds[passed_genes_final, ]
+  object <- object[passed_genes_final, ]
 
-  sterms <- setdiff(
-    attr(gammodel$terms, "term.labels"),
-    attr(gammodel$pterms, "term.labels")
-  )
-  stopifnot(length(sterms) >= 1)
-
-  ## save fitted values in assays(object)[["mu"]]
-  nsamples <- ncol(object)
-  mu_hat <- t(vapply(gamFinal, function(x) x$mu_hat, rep(0, nsamples)))
-  mu_hat <- data.frame(mu_hat)
-  rownames(mu_hat) <- rownames(object)
-  colnames(mu_hat) <- colnames(object)
-  assays(object)[["mu"]] <- mu_hat
-
-  ## save results in mcols(object)
-  n1 <- length(gamFinal[[1]]$paramcoef) ## number of parametric variables
-  n2 <- length(gamFinal[[1]]$smoothedf) ## number of nonparametric variables
-  nm <- names(mcols(object))
-
-  tbl <- rbind(
-    vapply(gamFinal, function(x) x$paramcoef, rep(0, n1)),
-    vapply(gamFinal, function(x) x$paramSE, rep(1, n1)),
-    vapply(gamFinal, function(x) x$paramPvalue, rep(1, n1)),
-    vapply(gamFinal, function(x) x$smoothedf, rep(1, n2)),
-    vapply(gamFinal, function(x) x$smoothStatistic, rep(1, n2)),
-    vapply(gamFinal, function(x) x$smoothPvalue, rep(1, n2)),
-    vapply(gamFinal, function(x) x$deviance, 1),
-    vapply(gamGeneEst, function(x) x$outIter, 1),
-    vapply(gamFinal, function(x) x$innerIter, 1),
-    vapply(gamFinal, function(x) x$converged, TRUE),
-    vapply(gamGeneEst, function(x) x$sp, rep(1, n2)),
-    vapply(gamFinal, function(x) x$residualdf, 0),
-    vapply(gamFinal, function(x) x$nulldeviance, 0),
-    vapply(gamFinal, function(x) x$nulldf, 0),
-    vapply(gamGeneEst, function(x) x$gamma, 1)
-  )
-
-  if (AIC) {
-    tbl <- rbind(
-      tbl,
-      vapply(gamFinal, function(x) x$AICnonlin, 0),
-      vapply(gamFinal, function(x) x$BICnonlin, 0)
-    )
-  }
-  mcols(object) <- cbind(mcols(object), DataFrame(t(tbl)))
-
-  nm <- c(
-    nm, pterms, paste0("SE_", pterms), paste0("PValue_", pterms),
-    paste0("edf_", sterms), paste0("Chisq_", sterms),
-    paste0("PValue_", sterms), "deviance", "outIter", "innerIter",
-    "converged", paste0("smooth_", sterms),
-    "df_residual", "null_deviance", "df_null", "gamma"
-  )
-
-  if (AIC) {
-    nm <- c(nm, "AIC", "BIC")
-  }
-
-  colnames(mcols(object)) <- nm
-  class(mcols(object)[["outIter"]]) <- "integer"
-  class(mcols(object)[["innerIter"]]) <- "integer"
-  class(mcols(object)[["converged"]]) <- "logical"
-
+  ## Add the summary tables as a list column
+  mcols(dds)$fit <- I(gamFinal)
+  mcols(object) <- mcols(dds)
   metadata(object)$fitted <- TRUE
   message("Done!")
 
@@ -325,6 +250,31 @@ gamFit1 <- function(i, object, formula_offset, gamma, dat, fns, ...) {
   )
 }
 
+#' Fit Gam Step 2
+#'
+#' @param gam_fns bam or gam
+#' @param formula form
+#' @param data data
+#' @param start step 1 param
+#' @param sp step 1 param
+#' @param theta step 1 param
+#' @param ... bam or gam args
+#'
+#' @keywords internal
+#' @noRd
+fit_gam2 <- function(gam_fns, formula, data, start, sp, theta, ...) {
+  fit <- gam_fns(
+    formula = formula,
+    family = negbin(theta = theta, link = "log"),
+    method = "REML",
+    sp = sp,
+    start = start,
+    data = data,
+    ...
+  )
+  return(fit)
+}
+
 #' Second Step of GAM Fit
 #'
 #' @param i iteration
@@ -334,50 +284,42 @@ gamFit1 <- function(i, object, formula_offset, gamma, dat, fns, ...) {
 #' @param formula_offset formula
 #' @param gamGeneEst gamGeneEst obj
 #' @param gamDispMAP gamDispMAP obj
+#' @param AIC add AIC and BIC or not
 #' @param ... args passed to gam or bam
 #'
 #' @noRd
 #' @keywords internal
-#' @return a gam fit or NULL
+#' @return list of tables that contain p values
 gamFit2 <- function(i, gam_fns, dat, object, formula_offset, gamGeneEst, gamDispMAP, AIC, ...) {
-  dat$y <- assay(object)[i, ] ## ith gene count
-  start <- gamGeneEst[[i]]$coef ## initial coefficients
-
-  gamFinalFit <- gam_fns(
-    formula = formula_offset,
-    family = negbin(theta = 1 / gamDispMAP[i], link = "log"),
-    method = "REML", sp = gamGeneEst[[i]]$sp,
-    start = start, data = dat, ...
+  dat$y <- assay(object)[i, ] # ith gene count
+  gamFinalFit <- tryCatch(
+    expr = fit_gam2(
+      gam_fns = gam_fns,
+      formula = formula_offset,
+      data = dat,
+      start = gamGeneEst[[i]]$coef, # initial coefficients
+      sp = gamGeneEst[[i]]$sp,
+      theta = (1 / gamDispMAP[i]),
+      ...
+    ),
+    error = function(e) NULL,
+    warning = function(w) NULL
   )
 
-  gamFinalFit_summary <- summary(gamFinalFit)
-  stat_col_name <- grep("value", colnames(gamFinalFit_summary$p.table), value = TRUE)
-  p_col_name <- grep("Pr\\(>", colnames(gamFinalFit_summary$p.table), value = TRUE)
-  smooth_stat <- grep("^Chi.sq$|^F$", colnames(gamFinalFit_summary$s.table), value = TRUE)
+  if (is.null(gamFinalFit)) {
+    return(NULL)
+  }
+
+  sum_obj <- summary(gamFinalFit)
 
   results <- list(
-    # non-smooths terms
-    mu_hat = gamFinalFit$fitted.values,
-    paramcoef = gamFinalFit_summary$p.table[, "Estimate"],
-    paramSE = gamFinalFit_summary$p.table[, "Std. Error"],
-    paramStatistic = gamFinalFit_summary$p.table[, stat_col_name],
-    paramPvalue = gamFinalFit_summary$p.table[, p_col_name],
-    # smooths terms
-    smoothedf = gamFinalFit_summary$s.table[, "edf"],
-    smoothStatistic = gamFinalFit_summary$s.table[, smooth_stat],
-    smoothPvalue = gamFinalFit_summary$s.table[, "p-value"],
-    deviance = gamFinalFit$deviance,
-    innerIter = gamFinalFit$iter, # number of inner iterations
-    converged = gamFinalFit$converged,
-    residualdf = gamFinalFit$df.residual,
-    nulldeviance = gamFinalFit$null.deviance,
-    nulldf = gamFinalFit$df.null
+    gene_id = row.names(object)[i],
+    p.table = sum_obj$p.table,
+    s.table = sum_obj$s.table
   )
 
   if (AIC) {
-    results <- c(
-      results, list(AICnonlin = AIC(gamFinalFit), BICnonlin = BIC(gamFinalFit))
-    )
+    results <- c(results, list(AICnonlin = AIC(gamFinalFit), BICnonlin = BIC(gamFinalFit)))
   }
 
   return(results)
