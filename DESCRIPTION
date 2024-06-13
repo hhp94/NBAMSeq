@@ -33,6 +33,6 @@ Suggests:
     rmarkdown,
     testthat,
     ggplot2
-RoxygenNote: 6.1.0
+RoxygenNote: 7.3.1
 VignetteBuilder: knitr
 biocViews: RNASeq, DifferentialExpression, GeneExpression, Sequencing, Coverage
