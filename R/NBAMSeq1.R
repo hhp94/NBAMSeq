@@ -9,7 +9,8 @@
 #' details.
 #' @param BPPARAM an argument provided to \code{\link{bplapply}}. See
 #' \code{\link[BiocParallel]{register}} for details.
-#' @param bam use bam from mgcv instead of gam. bam can be faster for large data.
+#' @param use_bam use bam from mgcv instead of gam. bam can be faster for large data.
+#' @param AIC generate AIC/BIC for each gene or not.
 #' @param ... additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}
 #' @export
 #' @importFrom mgcv bam gam s nb negbin
@@ -24,7 +25,7 @@
 #' @examples
 #' gsd <- makeExample(n = 3, m = 10)
 #' gsd <- NBAMSeq1(gsd)
-NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...) {
+NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC = FALSE, ...) {
   ## check input
   stopifnot(is(object, "NBAMSeqDataSet"))
   stopifnot(is.numeric(gamma))
@@ -32,6 +33,9 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...) 
   stopifnot("'gamma' should be greater or equal to 1." = gamma >= 1)
   stopifnot(is.logical(use_bam))
   stopifnot(length(use_bam) == 1)
+  stopifnot(is.logical(AIC))
+  stopifnot(length(AIC) == 1)
+  metadata(object)$AIC <- AIC
 
   if (is.null(BPPARAM)) {
     BPPARAM <- bpparam("SerialParam")
@@ -88,7 +92,7 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...) 
   passed_genes <- vapply(
     gamGeneEst, \(x) {
       x$gene
-      }, "character"
+    }, "character"
   )
   dds <- dds[passed_genes, ]
   object <- object[passed_genes, ]
@@ -133,13 +137,14 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...) 
     seq_len(nrow(object)),
     \(i) {
       gamFit2(
-        i, 
-        gam_fns = fns, 
-        dat = dat, 
-        object = object, 
-        formula_offset = formula_offset, 
-        gamGeneEst = gamGeneEst, 
-        gamDispMAP = gamDispMAP, 
+        i,
+        gam_fns = fns,
+        dat = dat,
+        object = object,
+        formula_offset = formula_offset,
+        gamGeneEst = gamGeneEst,
+        gamDispMAP = gamDispMAP,
+        AIC = AIC,
         ...
       )
     },
@@ -190,36 +195,46 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...) 
   n1 <- length(gamFinal[[1]]$paramcoef) ## number of parametric variables
   n2 <- length(gamFinal[[1]]$smoothedf) ## number of nonparametric variables
   nm <- names(mcols(object))
-  mcols(object) <- cbind(
-    mcols(object),
-    DataFrame(t(rbind(
-      vapply(gamFinal, function(x) x$paramcoef, rep(0, n1)),
-      vapply(gamFinal, function(x) x$paramSE, rep(1, n1)),
-      vapply(gamFinal, function(x) x$paramPvalue, rep(1, n1)),
-      vapply(gamFinal, function(x) x$smoothedf, rep(1, n2)),
-      vapply(gamFinal, function(x) x$smoothChisq, rep(1, n2)),
-      vapply(gamFinal, function(x) x$smoothPvalue, rep(1, n2)),
-      vapply(gamFinal, function(x) x$deviance, 1),
-      vapply(gamGeneEst, function(x) x$outIter, 1),
-      vapply(gamFinal, function(x) x$innerIter, 1),
-      vapply(gamFinal, function(x) x$converged, TRUE),
-      vapply(gamGeneEst, function(x) x$sp, rep(1, n2)),
-      vapply(gamFinal, function(x) x$residualdf, 0),
-      vapply(gamFinal, function(x) x$nulldeviance, 0),
-      vapply(gamFinal, function(x) x$nulldf, 0),
-      vapply(gamGeneEst, function(x) x$gamma, 1),
+
+  tbl <- rbind(
+    vapply(gamFinal, function(x) x$paramcoef, rep(0, n1)),
+    vapply(gamFinal, function(x) x$paramSE, rep(1, n1)),
+    vapply(gamFinal, function(x) x$paramPvalue, rep(1, n1)),
+    vapply(gamFinal, function(x) x$smoothedf, rep(1, n2)),
+    vapply(gamFinal, function(x) x$smoothStatistic, rep(1, n2)),
+    vapply(gamFinal, function(x) x$smoothPvalue, rep(1, n2)),
+    vapply(gamFinal, function(x) x$deviance, 1),
+    vapply(gamGeneEst, function(x) x$outIter, 1),
+    vapply(gamFinal, function(x) x$innerIter, 1),
+    vapply(gamFinal, function(x) x$converged, TRUE),
+    vapply(gamGeneEst, function(x) x$sp, rep(1, n2)),
+    vapply(gamFinal, function(x) x$residualdf, 0),
+    vapply(gamFinal, function(x) x$nulldeviance, 0),
+    vapply(gamFinal, function(x) x$nulldf, 0),
+    vapply(gamGeneEst, function(x) x$gamma, 1)
+  )
+
+  if (AIC) {
+    tbl <- rbind(
+      tbl,
       vapply(gamFinal, function(x) x$AICnonlin, 0),
       vapply(gamFinal, function(x) x$BICnonlin, 0)
-    )))
-  )
+    )
+  }
+  mcols(object) <- cbind(mcols(object), DataFrame(t(tbl)))
 
   nm <- c(
     nm, pterms, paste0("SE_", pterms), paste0("PValue_", pterms),
     paste0("edf_", sterms), paste0("Chisq_", sterms),
     paste0("PValue_", sterms), "deviance", "outIter", "innerIter",
     "converged", paste0("smooth_", sterms),
-    "df_residual", "null_deviance", "df_null", "gamma", "AIC", "BIC"
+    "df_residual", "null_deviance", "df_null", "gamma"
   )
+
+  if (AIC) {
+    nm <- c(nm, "AIC", "BIC")
+  }
+
   colnames(mcols(object)) <- nm
   class(mcols(object)[["outIter"]]) <- "integer"
   class(mcols(object)[["innerIter"]]) <- "integer"
@@ -227,19 +242,19 @@ NBAMSeq1 <- function(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...) 
 
   metadata(object)$fitted <- TRUE
   message("Done!")
-  
+
   return(object)
 }
 
 #' Gene-wise GAM model
 #'
 #' Wrapper around gam or bam that allows you to modify gamma
-#'  
+#'
 #' @param gam_fns bam or gam
 #' @param formula formula to fit on each gene
 #' @param gamma_value see ?mgcv::gam
 #' @param data data frame
-#' @param ... argument passed to gam 
+#' @param ... argument passed to gam
 #'
 #' @noRd
 #' @keywords internal
@@ -274,7 +289,7 @@ fit_gam1 <- function(gam_fns, formula, gamma_value, data, ...) {
 #' @return a gam fit or NULL
 gamFit1 <- function(i, object, formula_offset, gamma, dat, fns, ...) {
   dat$y <- assay(object)[i, ]
-  
+
   gamfit <- tryCatch(
     expr = fit_gam1(fns, formula_offset, gamma, dat, ...),
     error = function(e) {
@@ -292,11 +307,11 @@ gamFit1 <- function(i, object, formula_offset, gamma, dat, fns, ...) {
       )
     }
   )
-  
+
   if (is.null(gamfit)) {
     return(NULL)
   }
-  
+
   return(
     list(
       theta = gamfit$family$getTheta(TRUE),
@@ -324,35 +339,46 @@ gamFit1 <- function(i, object, formula_offset, gamma, dat, fns, ...) {
 #' @noRd
 #' @keywords internal
 #' @return a gam fit or NULL
-gamFit2 <- function(i, gam_fns, dat, object, formula_offset, gamGeneEst, gamDispMAP, ...) {
+gamFit2 <- function(i, gam_fns, dat, object, formula_offset, gamGeneEst, gamDispMAP, AIC, ...) {
   dat$y <- assay(object)[i, ] ## ith gene count
   start <- gamGeneEst[[i]]$coef ## initial coefficients
-  
+
   gamFinalFit <- gam_fns(
     formula = formula_offset,
     family = negbin(theta = 1 / gamDispMAP[i], link = "log"),
     method = "REML", sp = gamGeneEst[[i]]$sp,
     start = start, data = dat, ...
   )
-  
+
   gamFinalFit_summary <- summary(gamFinalFit)
-  
-  list(
+  stat_col_name <- grep("value", colnames(gamFinalFit_summary$p.table), value = TRUE)
+  p_col_name <- grep("Pr\\(>", colnames(gamFinalFit_summary$p.table), value = TRUE)
+  smooth_stat <- grep("^Chi.sq$|^F$", colnames(gamFinalFit_summary$s.table), value = TRUE)
+
+  results <- list(
+    # non-smooths terms
     mu_hat = gamFinalFit$fitted.values,
     paramcoef = gamFinalFit_summary$p.table[, "Estimate"],
     paramSE = gamFinalFit_summary$p.table[, "Std. Error"],
-    paramZscore = gamFinalFit_summary$p.table[, "z value"],
-    paramPvalue = gamFinalFit_summary$p.table[, "Pr(>|z|)"],
+    paramStatistic = gamFinalFit_summary$p.table[, stat_col_name],
+    paramPvalue = gamFinalFit_summary$p.table[, p_col_name],
+    # smooths terms
     smoothedf = gamFinalFit_summary$s.table[, "edf"],
-    smoothChisq = gamFinalFit_summary$s.table[, "Chi.sq"],
+    smoothStatistic = gamFinalFit_summary$s.table[, smooth_stat],
     smoothPvalue = gamFinalFit_summary$s.table[, "p-value"],
     deviance = gamFinalFit$deviance,
     innerIter = gamFinalFit$iter, # number of inner iterations
     converged = gamFinalFit$converged,
     residualdf = gamFinalFit$df.residual,
     nulldeviance = gamFinalFit$null.deviance,
-    nulldf = gamFinalFit$df.null,
-    AICnonlin = AIC(gamFinalFit),
-    BICnonlin = BIC(gamFinalFit)
+    nulldf = gamFinalFit$df.null
   )
+
+  if (AIC) {
+    results <- c(
+      results, list(AICnonlin = AIC(gamFinalFit), BICnonlin = BIC(gamFinalFit))
+    )
+  }
+
+  return(results)
 }

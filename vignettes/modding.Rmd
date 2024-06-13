@@ -1,0 +1,69 @@
+---
+title: "modding"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{modding}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Todo 
+Simplify the `results1` and return function and possibly add `gamm`. But for now this is sufficient. Expect the function to still run very slowly because of the multiple steps and how each model is running 15k+ genes.
+
+
+# Scratchpad
+```{r setup}
+library(devtools)
+library(testthat)
+load_all()
+
+library(microbenchmark)
+
+set.seed(1234)
+sim1 <- makeExample(n = 4, m = 10)
+sim1$id <- factor(seq_along(sim1$pheno))
+sim1$f <- factor(rbinom(ncol(sim1), 1, 0.5)) 
+sim1@design <- ~ s(pheno) + s(id, bs = "re") + f
+
+debug(NBAMSeq1)
+debug(gamFit2)
+test <- NBAMSeq1(sim1, use_bam = TRUE)
+test1 <- NBAMSeq1(sim1, use_bam = FALSE)
+test2 <- NBAMSeq1(sim1, AIC = TRUE)
+results(test2, "pheno")
+
+results(test, name = "pheno")
+results(test1, name = "pheno")
+
+results(test, contrast = c("f", "1", "0"))
+results(test1, contrast = c("f", "1", "0"))
+
+results(test, name = "pheno")
+```
+
+```{r}
+library(mgcv)
+gs <- gamSim(6, n = 200, scale = .2, dist = "poisson")
+
+gam(
+  y ~ s(x0) + s(x1) + s(x2) + s(fac, bs = "re"),
+  family = nb(),
+  data = gs
+) |> 
+  summary()
+
+gamm(
+  y ~ s(x0) + s(x1) + s(x2),
+  family = nb(),
+  data = gs,
+  random = list(fac =  ~ 1)
+)[[2]] |> 
+  summary()
+```

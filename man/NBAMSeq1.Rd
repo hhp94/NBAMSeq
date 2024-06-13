@@ -5,7 +5,14 @@
 \title{Differential expression analysis based on negative binomial additive
 model}
 \usage{
-NBAMSeq1(object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, ...)
+NBAMSeq1(
+  object,
+  gamma = 2.5,
+  BPPARAM = NULL,
+  use_bam = FALSE,
+  AIC = FALSE,
+  ...
+)
 }
 \arguments{
 \item{object}{a NBAMSeqDataSet object}
@@ -17,9 +24,11 @@ details.}
 \item{BPPARAM}{an argument provided to \code{\link{bplapply}}. See
 \code{\link[BiocParallel]{register}} for details.}
 
-\item{...}{additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}}
+\item{use_bam}{use bam from mgcv instead of gam. bam can be faster for large data.}
 
-\item{bam}{use bam from mgcv instead of gam. bam can be faster for large data.}
+\item{AIC}{generate AIC/BIC for each gene or not.}
+
+\item{...}{additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}}
 }
 \value{
 a NBAMSeqDataSet object
