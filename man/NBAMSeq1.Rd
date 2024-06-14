@@ -12,6 +12,9 @@ NBAMSeq1(
   use_bam = FALSE,
   AIC = FALSE,
   alpha_bound = Inf,
+  joint_test = NULL,
+  save_model = FALSE,
+  verbose = FALSE,
   ...
 )
 }
@@ -30,6 +33,13 @@ details.}
 \item{AIC}{generate AIC/BIC for each gene or not.}
 
 \item{alpha_bound}{set upper bound for gene wise dispersion parameter. Can help if there are errors. 10 is sufficiently big.}
+
+\item{joint_test}{list of character of terms to be used in a nested joint lrt test.
+Each element of the list is a joint test where the terms must be in the design. Warning: will take double the original time for each test.}
+
+\item{save_model}{save the final gam model for each gene or not. Warning: will take up a lot of space}
+
+\item{verbose}{verbose TRUE or FALSE}
 
 \item{...}{additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}}
 }

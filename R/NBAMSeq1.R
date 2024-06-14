@@ -12,6 +12,10 @@
 #' @param use_bam use bam from mgcv instead of gam. bam can be faster for large data.
 #' @param AIC generate AIC/BIC for each gene or not.
 #' @param alpha_bound set upper bound for gene wise dispersion parameter. Can help if there are errors. 10 is sufficiently big.
+#' @param joint_test list of character of terms to be used in a nested joint lrt test.
+#' Each element of the list is a joint test where the terms must be in the design. Warning: will take double the original time for each test.
+#' @param save_model save the final gam model for each gene or not. Warning: will take up a lot of space
+#' @param verbose verbose TRUE or FALSE
 #' @param ... additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}
 #' @export
 #' @importFrom mgcv bam gam s nb negbin
@@ -27,7 +31,8 @@
 #' gsd <- makeExample(n = 3, m = 10)
 #' gsd <- NBAMSeq1(gsd)
 NBAMSeq1 <- function(
-    object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC = FALSE, alpha_bound = Inf,
+    object, gamma = 2.5, BPPARAM = NULL, use_bam = FALSE, AIC = FALSE,
+    alpha_bound = Inf, joint_test = NULL, save_model = FALSE, verbose = FALSE,
     ...) {
   ## check input
   stopifnot(is(object, "NBAMSeqDataSet"))
@@ -39,8 +44,29 @@ NBAMSeq1 <- function(
   stopifnot(is.logical(AIC))
   stopifnot(length(AIC) == 1)
   stopifnot(alpha_bound > 0, length(alpha_bound) == 1)
+  stopifnot(is.logical(save_model))
+  stopifnot(length(save_model) == 1)
+  stopifnot(is.logical(verbose))
+  stopifnot(length(verbose) == 1)
+  old_save_model <- save_model
+  if (!is.null(joint_test)) {
+    stopifnot(
+      "joint_test should be a list of character of terms to be joint tested" =
+        is.list(joint_test) && all(sapply(joint_test, function(x) {
+          all(is.character(x))
+        }))
+    )
+    joint_test <- unique(lapply(joint_test, function(x) {
+      get_term.labels(as.formula(paste("~", paste(x, collapse = " + "))))
+    }))
+    design_terms <- get_term.labels(getDesign(object))
+    stopifnot("some terms in joint tests are not found in design" = all(unlist(joint_test) %in% design_terms))
+    save_model <- TRUE
+  }
   metadata(object)$AIC <- AIC
-
+  if (length(row.names(object)) > unique(length(row.names(object)))) {
+    stop("duplicated gene_id are not allowed, check row.names(object)")
+  }
   if (is.null(BPPARAM)) {
     BPPARAM <- bpparam("SerialParam")
   }
@@ -74,9 +100,12 @@ NBAMSeq1 <- function(
   dat$logsf <- logsf
   formula_offset <- update(getDesign(object), y ~ . + offset(logsf))
 
-  message("\nEstimating smoothing parameters and gene-wise dispersions")
+  if (verbose) {
+    message("\nEstimating smoothing parameters and gene-wise dispersions")
+  }
+
   gamGeneEst <- bplapply(
-    seq_len(nrow(object)), \(i) {
+    seq_len(nrow(object)), function(i) {
       gamFit1(
         i = i,
         object = object,
@@ -93,11 +122,15 @@ NBAMSeq1 <- function(
   ## remove models that failed
   gamGeneEst <- gamGeneEst[lengths(gamGeneEst) != 0]
   stopifnot("GAM for all genes failled. Check the formula and data" = length(gamGeneEst) > 0)
-  passed_genes <- vapply(gamGeneEst, function(x) {x$gene}, "character")
+  passed_genes <- vapply(gamGeneEst, function(x) {
+    x$gene
+  }, "character")
   dds <- dds[passed_genes, ]
   object <- object[passed_genes, ]
   ##  get gam gene wise dispersion estimates and save them in mcols(dds)
-  mcols(dds)$dispGeneEst <- (1 / vapply(gamGeneEst, function(x) {x$theta}, 1))
+  mcols(dds)$dispGeneEst <- (1 / vapply(gamGeneEst, function(x) {
+    x$theta
+  }, 1))
 
   if (!is.infinite(alpha_bound)) {
     ##  bound gene wise dispersion
@@ -106,7 +139,9 @@ NBAMSeq1 <- function(
   }
 
   ##  fit dispersion trend via `estimateDispersionsFit` function in DESeq2
-  message("Estimating dispersion trend")
+  if (verbose) {
+    message("Estimating dispersion trend")
+  }
   dds <- estimateDispersionsFit(dds)
 
   ##  get gam mu estimates and save them in assays(dds)[["mu"]]
@@ -116,11 +151,11 @@ NBAMSeq1 <- function(
   assays(dds)[["mu"]] <- muhat
 
   ##  MAP dispersion estimates
-  message("Estimating MAP dispersion")
+  if (verbose) {
+    message("Estimating MAP dispersion")
+  }
   dds <- tryCatch(
-    expr = {
-      estimateDispersionsMAP(dds)
-    },
+    estimateDispersionsMAP(dds),
     error = function(e) {
       ## avoid possible matrix singular error in DESeq2 C++ code
       assays(dds)[["mu"]] <- muhat + 1e-6
@@ -135,10 +170,12 @@ NBAMSeq1 <- function(
 
   gamDispMAP <- mcols(dds)$dispMAP
 
-  message("Estimating model coefficients")
+  if (verbose) {
+    message("Estimating model coefficients")
+  }
   gamFinal <- bplapply(
     seq_len(nrow(object)),
-    \(i) {
+    function(i) {
       gamFit2(
         i,
         gam_fns = fns,
@@ -148,6 +185,7 @@ NBAMSeq1 <- function(
         gamGeneEst = gamGeneEst,
         gamDispMAP = gamDispMAP,
         AIC = AIC,
+        save_model = save_model,
         ...
       )
     },
@@ -156,8 +194,13 @@ NBAMSeq1 <- function(
 
   ## remove models that failed and align the data by row names
   gamFinal <- gamFinal[lengths(gamFinal) != 0]
-  stopifnot("GAM for all genes second step failed. Check the formula and data" = length(gamFinal) > 0)
-  passed_genes_final <- vapply(gamFinal, function(x) {x$gene_id}, FUN.VALUE = "character")
+  stopifnot(
+    "GAM for all genes second step failed. Check the formula and data" =
+      length(gamFinal) > 0
+  )
+  passed_genes_final <- vapply(gamFinal, function(x) {
+    x$gene_id
+  }, FUN.VALUE = "character")
   names(gamFinal) <- passed_genes_final
   dds <- dds[passed_genes_final, ]
   object <- object[passed_genes_final, ]
@@ -166,7 +209,42 @@ NBAMSeq1 <- function(
   mcols(dds)$fit <- I(gamFinal)
   mcols(object) <- mcols(dds)
   metadata(object)$fitted <- TRUE
-  message("Done!")
+
+  ## Use recursion for joint test
+  if (!is.null(joint_test)) {
+    joint_results <- lapply(joint_test, function(x) {
+      test_joint(
+        x,
+        object,
+        gamma,
+        BPPARAM,
+        use_bam,
+        AIC,
+        alpha_bound,
+        joint_test,
+        save_model,
+        verbose,
+        ...
+      )
+    })
+    joint_results <- lapply(joint_results, function(x) {
+      simplify2array(x[row.names(object)])
+    })
+
+    for(i in seq_along(joint_results)) {
+      mcols(object)[[paste0("joint_results", i)]] <- joint_results[[i]]
+    }
+  }
+
+  if (!old_save_model) {
+    for (i in row.names(object)) {
+      mcols(object)$fit[[i]]$gamFinalFit <- NULL
+    }
+  }
+
+  if (verbose) {
+    message("Done!")
+  }
 
   return(object)
 }
@@ -290,8 +368,19 @@ fit_gam2 <- function(gam_fns, formula, data, start, sp, theta, ...) {
 #' @noRd
 #' @keywords internal
 #' @return list of tables that contain p values
-gamFit2 <- function(i, gam_fns, dat, object, formula_offset, gamGeneEst, gamDispMAP, AIC, ...) {
+gamFit2 <- function(
+    i,
+    gam_fns,
+    dat,
+    object,
+    formula_offset,
+    gamGeneEst,
+    gamDispMAP,
+    AIC,
+    save_model, ...) {
   dat$y <- assay(object)[i, ] # ith gene count
+  gene_id <- row.names(object)[i]
+
   gamFinalFit <- tryCatch(
     expr = fit_gam2(
       gam_fns = gam_fns,
@@ -313,7 +402,7 @@ gamFit2 <- function(i, gam_fns, dat, object, formula_offset, gamGeneEst, gamDisp
   sum_obj <- summary(gamFinalFit)
 
   results <- list(
-    gene_id = row.names(object)[i],
+    gene_id = gene_id,
     p.table = sum_obj$p.table,
     s.table = sum_obj$s.table
   )
@@ -322,5 +411,92 @@ gamFit2 <- function(i, gam_fns, dat, object, formula_offset, gamGeneEst, gamDisp
     results <- c(results, list(AICnonlin = AIC(gamFinalFit), BICnonlin = BIC(gamFinalFit)))
   }
 
+  if (save_model) {
+    results <- c(results, list(gamFinalFit = gamFinalFit))
+  }
+
   return(results)
+}
+
+#' Joint Test Function
+#'
+#' To be called in NBAMSeq1. Basically runs NBAMSeq1 with a reduced formula and
+#' then perform glrt for each gene
+#'
+#' @return a list of genes with p.value and NA if there's an error
+#' @noRd
+#' @keywords internal
+test_joint <- function(
+    test,
+    object,
+    gamma,
+    BPPARAM,
+    use_bam,
+    AIC,
+    alpha_bound,
+    joint_test,
+    save_model,
+    verbose,
+    ...) {
+  reduced_form <- update(
+    object@design,
+    as.formula(paste("~ . -", paste(test, collapse = " - ")))
+  )
+  object@design <- reduced_form
+  reduced_fit <- mcols(NBAMSeq1(
+    object,
+    gamma = gamma,
+    BPPARAM = BPPARAM,
+    use_bam = use_bam,
+    AIC = AIC,
+    alpha_bound = alpha_bound,
+    joint_test = NULL,
+    save_model = TRUE,
+    verbose = FALSE,
+    ...
+  ))$fit
+
+  if (is.null(names(reduced_fit))) {
+    genes <- vapply(fit, function(x) {
+      x$gene_id
+    }, "character")
+    names(reduced_fit) <- genes
+  }
+  stopifnot("unexpected gene id error" = all(names(reduced_fit) %in% row.names(object)))
+  results <- bplapply(
+    row.names(object),
+    function(i) {
+      tryCatch(
+        {
+          a <- anova(
+            reduced_fit[[i]]$gamFinalFit,
+            mcols(object)$fit[[i]]$gamFinalFit,
+            test = "Chisq"
+          )
+          pr_column <- grep("Pr\\(", names(a), value = TRUE)
+          a[[pr_column]][2]
+        },
+        warning = function(w) {
+          NA
+        },
+        error = function(e) {
+          NA
+        }
+      )
+    },
+    BPPARAM = BPPARAM
+  )
+  names(results) <- row.names(object)
+  return(results)
+}
+
+#' Get terms from formula
+#'
+#' @param formula formula object
+#'
+#' @return character of terms
+#' @noRd
+#' @keywords internal
+get_term.labels <- function(formula) {
+  return(attr(terms(formula), "term.labels"))
 }
