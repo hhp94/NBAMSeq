@@ -24,6 +24,7 @@ The current results function doesn't handle more complicated smooths. Also contr
 library(devtools)
 library(testthat)
 library(microbenchmark)
+library(mgcv)
 load_all()
 
 set.seed(1234)
@@ -34,17 +35,72 @@ sim1@design <- ~ f + s(pheno, by = f) + s(id, bs = "re")
 
 debug(NBAMSeq1)
 debug(gamFit2)
-sim_fit <- NBAMSeq1(sim1)
+
+sim_fit <- NBAMSeq1(sim1, joint_test = list(c("f", 's(id, bs = "re")')))
+
 mcols(sim_fit)$fit[[4]]
 ```
 
 ```{r}
+joint_test <- list(c("s( x )", "   a      "))
+joint_test <- lapply(joint_test, function(x) {
+  get_term_labels(reformulate(x))
+})
+joint_test[[1]]
 
+design_terms <- terms(getDesign(object))
+attr(design_terms, "term.labels") 
+
+f1 <- mpg ~ s(drat) + s(disp)
+d <- gam(mpg ~ s(drat) + s(disp), method = "REML", data = mtcars)
+
+test <- joint_test_fns(d, c("s(drat)", "s(disp)"))
+test
+
+
+test$`Pr(>Chi)`
+
+sapply(1:2, \(x){data.frame(V1 = 1)}, simplify = "array")
+
+d |> summary()
+mtcars
+
+#' Joint Test Gam
+#'
+#' Use the generalized lrt test to jointly test multiple term. Can help if a smooth term has multiple p values
+#'
+#' @param gam the "full" gam fit. The game with all terms
+#' @param test_terms the terms to be jointly tested with the glrt test
+#' @param ... args passed to fit_gam2. The update function doesn't work.
+#' @keywords internal
+#' @noRd
+#' @return a named 1x1 matrix
+joint_test_fns <- function(gam, test_terms, ...) {
+  reduced_form <- as.formula(paste("~ . -", paste(test_terms, collapse = " - ")))
+  updated_form <- update(gam$formula, reduced_form)
+  reduced_gam <- fit_gam2(formula = updated_form, ...)
+  anova_obj <- anova(reduced_gam, gam, test = "LRT")
+  # Can also test for delta AIC if needed
+  results <- matrix(
+    anova_obj$`Pr(>Chi)`[2],
+    dimnames = list(paste("-", paste(test_terms, collapse = " - ")), "p.joint")
+  )
+  return(results)
+}
 ```
 
-```{r setup}
-library(mgcv)
-d <- gam(mpg ~ s(drat), data = mtcars)
+```{r}
+# Example list of 1x1 matrices
+list_of_matrices <- lapply(1:5, function(x) matrix(x, nrow = 1, ncol = 1, dimnames = list("a", "b")))
+list_of_matrices
+Reduce(rbind, list_of_matrices) |> class()
+# Use vapply to create an nx1 matrix
+result_matrix <- sapply(list_of_matrices, function(m) m[1, 1])
+result_matrix
+# Convert to a matrix (nx1)
+result_matrix <- matrix(result_matrix, ncol = 1)
 
-lobstr::obj_size(summary(d))
+# Print the result matrix
+print(result_matrix)
 ```
+
