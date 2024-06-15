@@ -2,8 +2,7 @@
 % Please edit documentation in R/NBAMSeq1.R
 \name{NBAMSeq1}
 \alias{NBAMSeq1}
-\title{Differential expression analysis based on negative binomial additive
-model}
+\title{Differential Expression Analysis Based on Negative Binomial Additive Model}
 \usage{
 NBAMSeq1(
   object,
@@ -12,47 +11,42 @@ NBAMSeq1(
   use_bam = FALSE,
   AIC = FALSE,
   alpha_bound = Inf,
-  joint_test = NULL,
   save_model = FALSE,
   verbose = FALSE,
   ...
 )
 }
 \arguments{
-\item{object}{a NBAMSeqDataSet object}
+\item{object}{A \code{\link[=NBAMSeqDataSet]{NBAMSeqDataSet()}} object.}
 
-\item{gamma}{a number greater or equal to 1. Increase gamma to create
-smoother models. Default gamma is 2.5. See \code{\link[mgcv]{gam}} for
-details.}
+\item{gamma}{A number greater than or equal to 1. Increase gamma to create
+smoother models. Default gamma is 2.5. See \code{\link[mgcv:gam]{mgcv::gam()}} for details.}
 
-\item{BPPARAM}{an argument provided to \code{\link{bplapply}}. See
-\code{\link[BiocParallel]{register}} for details.}
+\item{BPPARAM}{An argument provided to \code{\link[BiocParallel:bplapply]{BiocParallel::bplapply()}}. See
+\code{\link[BiocParallel:register]{BiocParallel::register()}} for details.}
 
-\item{use_bam}{use bam from mgcv instead of gam. bam can be faster for large data.}
+\item{use_bam}{Logical, whether to use \code{\link[mgcv:bam]{mgcv::bam()}} instead of \code{\link[mgcv:gam]{mgcv::gam()}}. \code{bam} can be faster for large data.}
 
-\item{AIC}{generate AIC/BIC for each gene or not.}
+\item{AIC}{Logical, whether to generate AIC/BIC for each gene.}
 
-\item{alpha_bound}{set upper bound for gene wise dispersion parameter. Can help if there are errors. 10 is sufficiently big.}
+\item{alpha_bound}{Numeric, set upper bound for gene-wise dispersion parameter. Can help if there are errors. A value of 10 is sufficiently large.}
 
-\item{joint_test}{list of character of terms to be used in a nested joint lrt test.
-Each element of the list is a joint test where the terms must be in the design. Warning: will take double the original time for each test.}
+\item{save_model}{Logical, whether to save the final \code{\link[mgcv:gam]{mgcv::gam()}} model for each gene. Warning: will take up a lot of memory.}
 
-\item{save_model}{save the final gam model for each gene or not. Warning: will take up a lot of space}
+\item{verbose}{Logical, whether to print verbose output.}
 
-\item{verbose}{verbose TRUE or FALSE}
-
-\item{...}{additional arguments provided to \code{\link[mgcv]{gam}} or \code{\link[mgcv]{bam}}}
+\item{...}{Additional arguments provided to \code{\link[mgcv:gam]{mgcv::gam()}} or \code{\link[mgcv:bam]{mgcv::bam()}}.}
 }
 \value{
-a NBAMSeqDataSet object
+A \code{\link[=NBAMSeqDataSet]{NBAMSeqDataSet()}} object with \code{metadata(object)$fitted == TRUE}.
 }
 \description{
 This function performs differential expression analysis based
-on negative binomial additive model.
+on a negative binomial additive model.
 }
 \examples{
-gsd <- makeExample(n = 3, m = 10)
-gsd <- NBAMSeq1(gsd)
+gsd <- NBAMSeq::makeExample(n = 3, m = 10)
+gsd <- NBAMSeq::NBAMSeq1(gsd)
 }
 \references{
 Love, M.I., Huber, W., Anders, S. (2014) Moderated estimation of

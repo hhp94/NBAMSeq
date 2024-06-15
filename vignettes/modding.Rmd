@@ -15,7 +15,7 @@ knitr::opts_chunk$set(
 ```
 
 # Todo 
-Simplify the `results1` and return function and possibly add `gamm`. But for now this is sufficient. Expect the function to still run very slowly because of the multiple steps and how each model is running 15k+ genes.
+Possibly add `gamm`. But for now this is sufficient. Expect the function to still run very slowly because of the multiple steps and how each model is running 15k+ genes.
 
 The current results function doesn't handle more complicated smooths. Also contrasting should be done at the fitting level. Needs to rewrite `results1`.
 
@@ -30,14 +30,23 @@ load_all()
 # styler::style_file("R/topTable1.R")
 
 set.seed(1234)
-sim1 <- makeExample(n = 20, m = 20)
+sim1 <- makeExample(n = 30, m = 20)
 sim1$id <- factor(seq_along(sim1$pheno))
 sim1$f <- factor(rbinom(ncol(sim1), 1, 0.5)) 
 sim1@design <- ~ f + s(pheno, by = f) + s(id, bs = "re")
 
-sim_fit <- NBAMSeq1(sim1, joint_test = list("s(pheno, by = f)"))
-
-topTable1(sim_fit, coef = "(Intercept)")
-
-joint_results = "joint_results1"
+sim_fit <- NBAMSeq1(sim1)
+topTable1(sim_fit, coef = "f1", sort.by = "adj.P.Value", number = Inf, adjust.method = "bonferroni")
 ```
+
+```{r}
+sim1@design <- ~ s(pheno)
+f1 <- NBAMSeq(sim1)
+f2 <- NBAMSeq1(sim1)
+
+r1 <- wrap_results(f1, name = "pheno")
+r2 <- topTable1(f2, coef = "s(pheno)", number = Inf)
+r1 |> class()
+r2[row.names(r1), c("edf", "P.Value")]|> class()
+```
+

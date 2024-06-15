@@ -17,7 +17,7 @@ in differential expression analysis.
 }}
 
 \references{
-Martin Morgan, Valerie Obenchain, Jim Hester and 
-Hervé Pagès (2018). SummarizedExperiment: SummarizedExperiment container. 
+Martin Morgan, Valerie Obenchain, Jim Hester and
+Hervé Pagès (2018). SummarizedExperiment: SummarizedExperiment container.
 R package version 1.12.0.
 }
