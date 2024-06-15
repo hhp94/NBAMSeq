@@ -61,21 +61,15 @@ NBAMSeq1 <- function(
     ignoreRank = TRUE # Set ignoreRank = TRUE because we can fit mixed model with gam
   )
 
-  if ("sizeFactors" %in% names(SummarizedExperiment::colData(dds))) {
-    logsf <- log(SummarizedExperiment::colData(object)$sizeFactors)
-    object$logsf <- logsf ## save logsf in object
-    DESeq2::sizeFactors(dds) <- SummarizedExperiment::colData(object)$sizeFactors
-  } else {
-    ## estimate size factors
-    dds <- DESeq2::estimateSizeFactors(dds)
-    logsf <- log(DESeq2::sizeFactors(dds))
-    SummarizedExperiment::colData(object)$sizeFactors <- DESeq2::sizeFactors(dds)
-    object$logsf <- logsf ## save logsf in object
-  }
+  ## estimate size factors
+  dds <- DESeq2::estimateSizeFactors(dds)
+  logsf <- log(DESeq2::sizeFactors(dds))
+  SummarizedExperiment::colData(object)$sizeFactors <- DESeq2::sizeFactors(dds)
+  object$logsf <- logsf ## save logsf in object
 
   dat <- as.data.frame(SummarizedExperiment::colData(object))
   dat$logsf <- logsf
-  formula_offset <- stats::update(getDesign(object), y ~ . + stats::offset(logsf))
+  formula_offset <- stats::update(getDesign(object), y ~ . + offset(logsf))
 
   if (verbose) {
     message("\nEstimating smoothing parameters and gene-wise dispersions")

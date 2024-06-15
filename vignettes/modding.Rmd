@@ -25,6 +25,7 @@ library(devtools)
 library(testthat)
 library(microbenchmark)
 library(mgcv)
+library(qs)
 load_all()
 # styler::style_file("R/NBAMSeq1.R")
 # styler::style_file("R/topTable1.R")
@@ -35,18 +36,6 @@ sim1$id <- factor(seq_along(sim1$pheno))
 sim1$f <- factor(rbinom(ncol(sim1), 1, 0.5)) 
 sim1@design <- ~ f + s(pheno, by = f) + s(id, bs = "re")
 
-sim_fit <- NBAMSeq1(sim1)
-topTable1(sim_fit, coef = "f1", sort.by = "adj.P.Value", number = Inf, adjust.method = "bonferroni")
+# sim_fit <- NBAMSeq1(sim1)
+# topTable1(sim_fit, coef = "f1", sort.by = "adj.P.Value", number = Inf, adjust.method = "bonferroni")
 ```
-
-```{r}
-sim1@design <- ~ s(pheno)
-f1 <- NBAMSeq(sim1)
-f2 <- NBAMSeq1(sim1)
-
-r1 <- wrap_results(f1, name = "pheno")
-r2 <- topTable1(f2, coef = "s(pheno)", number = Inf)
-r1 |> class()
-r2[row.names(r1), c("edf", "P.Value")]|> class()
-```
-
